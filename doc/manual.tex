@@ -1,0 +1,258 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+
+\lstset{
+    basicstyle=\small\ttfamily,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    breaklines=true,
+    language=Python,
+}
+
+\title{\textbf{Mirror -- Chiral Toolkit}\\User Manual}
+\author{Mingrui Zuo \& Lifeng Ding\\Xi'an Jiaotong-Liverpool University}
+\date{Version 0.6 -- June 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% =================================================================
+\section{Overview}
+% =================================================================
+
+\textbf{Mirror} (Chiral Toolkit) is a molecular-structure analysis platform
+built with Streamlit.  It provides six functional tabs for the analysis of
+porous crystalline frameworks (CIF) and guest molecules (PDB).
+
+\subsection{Technology Stack}
+
+\begin{tabular}{ll}
+    \toprule
+    Component & Technology \\
+    \midrule
+    Frontend & Streamlit (Python 3.12) \\
+    3D Visualisation & py3Dmol / stmol / NGL Viewer \\
+    Crystallography & pymatgen (SpacegroupAnalyzer, Lattice) \\
+    Numerical & NumPy, SciPy (ndimage, signal) \\
+    Machine Learning & scikit-learn \\
+    Plotting & Matplotlib (Agg backend) \\
+    File parsing & Custom CIF / PDB / DEF parsers \\
+    \bottomrule
+\end{tabular}
+
+% =================================================================
+\section{Launching the Application}
+% =================================================================
+
+Run from the project root:
+
+\begin{lstlisting}[language=bash]
+streamlit run app.py
+\end{lstlisting}
+
+Or double-click \texttt{run.bat} on Windows.  The app opens at
+\url{http://localhost:8501}.
+
+% =================================================================
+\section{Tab 1: PDB Enantiomer (Mirror Generator)}
+% =================================================================
+
+Generates mirror images of molecules from PDB or RASPA DEF files.
+
+\subsection{Workflow}
+
+\begin{enumerate}
+    \item Upload a \texttt{.pdb} or \texttt{.def} file.
+    \item View molecular analysis: formula, atom count, mass,
+          bounding box, VDW radii, geometric and mass-weighted centroids.
+    \item Select a mirror plane: \textbf{YZ (invert x)},
+          \textbf{XZ (invert y)}, or \textbf{XY (invert z)}.
+    \item The mirrored structure is displayed alongside the original.
+    \item Download the mirrored PDB or mirrored DEF.
+\end{enumerate}
+
+\subsection{Notes}
+
+\begin{itemize}
+    \item Reflection is performed about the geometric centroid.
+    \item For DEF files, only the atom-position block is modified;
+          force-field parameters are preserved.
+\end{itemize}
+
+% =================================================================
+\section{Tab 2: CPA Alignment}
+% =================================================================
+
+Canonical Principal Axes (CPA) alignment rotates a molecule so that its
+principal axes of inertia align with the Cartesian axes.
+
+\subsection{Workflow}
+
+\begin{enumerate}
+    \item Upload a \texttt{.pdb} file.
+    \item Toggle hydrogen visibility and render style (stick, sphere/CPK,
+          line).
+    \item Select method: \textbf{mass-weighted} (inertia tensor) or
+          \textbf{geometric} (covariance matrix).
+    \item Click \textbf{Standardize Structure}.
+    \item Four views are shown: Original, Mirrored (YZ reflection),
+          CPA-aligned, and MCPA-aligned.
+    \item Each view displays principal moments $(I_1,I_2,I_3)$ and the
+          ratio $I_1/I_3$.  Degeneracy or near-spherical shape is flagged.
+    \item Download the CPA or MCPA PDB.
+\end{enumerate}
+
+For the mathematical theory, see the separate \textit{Mathematics and
+Algorithms} document.
+
+% =================================================================
+\section{Tab 3: CIF Toolkits}
+% =================================================================
+
+The central analysis tab for porous crystals.
+
+\subsection{Structure Visualization}
+
+\begin{itemize}
+    \item Upload a \texttt{.cif} file.
+    \item Adjust supercell dimensions ($n_a,n_b,n_c$).
+    \item Toggle cell box and background colour.
+    \item Rendered via NGL Viewer.
+\end{itemize}
+
+\subsection{Symmetry Analysis}
+
+Runs \texttt{pymatgen.SpacegroupAnalyzer} across multiple tolerances
+(\texttt{symprec} = 0.01, 0.05, 0.1, 0.2).  Reports:
+
+\begin{itemize}
+    \item Best space-group symbol and number.
+    \item Confidence score (fraction of tolerances in agreement).
+    \item Sohncke and enantiomorphic flags.
+    \item Full scan table.
+\end{itemize}
+
+\subsection{Element-based Channel Map}
+
+Detects 1D channels via 2D Voronoi tessellation in the $ab$-plane.
+
+\subsection{Grid-based Pore Detection \& VDW Heatmap}
+
+A detailed method producing:
+
+\begin{itemize}
+    \item Distance-field map with pore centre and radius.
+    \item Cylindrical projection of wall atoms (element-coloured).
+    \item Smooth Gaussian VDW heatmap on the $\theta$--$z$ plane.
+    \item FFT-based pore-shape classification: L2, L3, L4, or L6.
+\end{itemize}
+
+\subsection{Turbo Mode}
+
+Ultra-fast alternative using Voronoi tessellation + KDTree.  Suitable for
+real-time interactive use.
+
+% =================================================================
+\section{Tab 4: Accessible Orientations}
+% =================================================================
+
+Places a guest molecule inside a host channel and scans all orientations.
+
+\subsection{Workflow}
+
+\begin{enumerate}
+    \item Upload host CIF and guest PDB.
+    \item Preview four guest orientations: Original, Mirrored,
+          CPA-guest, MCPA-guest.
+    \item Toggle CPA alignment and select collision method
+          (\textbf{voxel} or \textbf{vdw}).
+    \item Extract the centralised channel (periodic replication along $c$).
+    \item View fit analysis (pore diameter vs. guest box diagonal).
+    \item Run channel accessibility (Mollweide map, $\theta$--$\phi$
+          heatmap).
+    \item Configure scan ($\theta$ and $\phi$ steps, clash scale,
+          mirror plane) and click \textbf{Scan Orientations}.
+\end{enumerate}
+
+\subsection{Three-Region Partition}
+
+Rolls the guest envelope sphere through the pore cross-section:
+
+\begin{itemize}
+    \item \textbf{Green}: envelope fits --- all orientations OK.
+    \item \textbf{Amber}: only centroid fits --- limited orientations.
+    \item \textbf{Red}: centroid does not fit.
+\end{itemize}
+
+\subsection{Pore Explorer}
+
+Interactively positions a crosshair and computes L/D orientation spheres.
+Displays 3D sphere, clearance heatmap, and L vs. D comparison.
+
+% =================================================================
+\section{Tab 5: Database Browser}
+% =================================================================
+
+Browse the CoRE-COF 1242 database.
+
+\begin{itemize}
+    \item Search by name or number.
+    \item Table with PLD, LCD, Density, Topology.
+    \item Select a COF to view metadata.
+    \item \textbf{Import \& Run}: loads the CIF, runs symmetry analysis,
+          and executes grid-based pore detection with full visual output.
+\end{itemize}
+
+% =================================================================
+\section{Tab 6: Information}
+% =================================================================
+
+Project goals, planned features, and contact details.
+
+% =================================================================
+\section{Batch Scripts}
+% =================================================================
+
+Scripts in \texttt{modules/scripts/}:
+
+\begin{tabular}{ll}
+    \toprule
+    Script & Purpose \\
+    \midrule
+    \texttt{benchmark\_database.py} & Full-database pore detection \\
+    \texttt{batch\_pore\_morphology.py} & Batch morphology computation \\
+    \texttt{batch\_fitness.py} & Host--guest fitness screening \\
+    \texttt{spinol\_ml\_analysis.py} & ML regression on spinol selectivity \\
+    \texttt{plot\_morphology\_scatter.py} & CI-coloured scatter plots \\
+    \texttt{plot\_topology\_pie.py} & Layer-cake topology/SG/sgType \\
+    \texttt{plot\_sgtype\_ddg.py} & sgType vs $\Delta\Delta G$ \\
+    \texttt{scaling\_benchmark.py} & Timing-scaling benchmarks \\
+    \bottomrule
+\end{tabular}
+
+% =================================================================
+\section{Output Data}
+% =================================================================
+
+Batch results are in \texttt{modules/database/benchmark/}:
+
+\begin{itemize}
+    \item \texttt{pore\_morphology.xlsx}: 1099 COFs $\times$ 24 columns
+          (pore radius, CI, CF, curvature, Fourier powers, helicity, etc.)
+    \item \texttt{benchmark.xlsx}: 1242 COFs with symmetry and dimensions.
+    \item PNG figures (topology cake plots, SG/sgType distributions,
+          scatter plots, ML diagnostics).
+\end{itemize}
+
+\end{document}

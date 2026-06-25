@@ -1,0 +1,497 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{bm}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+
+\newcommand{\vect}[1]{\bm{#1}}
+
+\title{\textbf{Mathematics and Algorithms of the Mirror Toolkit}}
+\author{Mingrui Zuo \& Lifeng Ding\\Xi'an Jiaotong-Liverpool University}
+\date{Version 0.6 -- June 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% =================================================================
+\section{Introduction}
+% =================================================================
+
+This document provides a detailed mathematical description of the core
+algorithms implemented in the Mirror (Chiral Toolkit) platform.  It
+covers the Canonical Principal Axes (CPA) alignment, the Kabsch
+algorithm, Sohncke mirror transformations, pore detection and morphology
+parameters, and guest-orientation accessibility mapping.
+
+% =================================================================
+\section{Canonical Principal Axes (CPA) Alignment}
+% =================================================================
+
+CPA alignment transforms a molecule into a standard orientation by
+aligning its principal axes of inertia with the Cartesian axes.  This
+provides a unique, orientation-independent reference frame.
+
+\subsection{Inertia Tensor}
+
+For a set of $N$ atoms with Cartesian positions
+$\{\vect{r}_i = (x_i, y_i, z_i)\}$ and masses $m_i$, the inertia tensor
+$\vect{I}$ is a $3 \times 3$ symmetric matrix:
+
+\begin{equation}
+\vect{I} = \begin{pmatrix}
+I_{xx} & I_{xy} & I_{xz} \\
+I_{xy} & I_{yy} & I_{yz} \\
+I_{xz} & I_{yz} & I_{zz}
+\end{pmatrix},
+\end{equation}
+
+with components:
+
+\begin{align}
+I_{xx} &= \sum_i m_i (y_i^2 + z_i^2), \\
+I_{yy} &= \sum_i m_i (x_i^2 + z_i^2), \\
+I_{zz} &= \sum_i m_i (x_i^2 + y_i^2), \\
+I_{xy} &= -\sum_i m_i x_i y_i, \\
+I_{xz} &= -\sum_i m_i x_i z_i, \\
+I_{yz} &= -\sum_i m_i y_i z_i.
+\end{align}
+
+The coordinates are first centred at the centre of mass:
+
+\begin{equation}
+\vect{r}'_i = \vect{r}_i - \vect{r}_{\text{COM}},
+\qquad
+\vect{r}_{\text{COM}} = \frac{\sum_i m_i \vect{r}_i}{\sum_i m_i}.
+\end{equation}
+
+\subsection{Eigendecomposition and Principal Axes}
+
+The inertia tensor is diagonalised via eigenvalue decomposition:
+
+\begin{equation}
+\vect{I} \vect{v}_k = \lambda_k \vect{v}_k,
+\qquad k = 1, 2, 3,
+\end{equation}
+
+where $\lambda_k$ are the principal moments of inertia (eigenvalues) and
+$\vect{v}_k$ are the principal axes (eigenvectors).  By convention, the
+eigenvalues are sorted in ascending order: $\lambda_1 \le \lambda_2 \le
+\lambda_3$.  The eigenvector $\vect{v}_1$ (corresponding to the smallest
+moment) is assigned to the $+x$ axis, $\vect{v}_2$ to $+y$, and the
+third axis is obtained from the cross product $\vect{v}_3 =
+\vect{v}_1 \times \vect{v}_2$ to ensure a right-handed coordinate
+system.
+
+\subsection{Axis Orientation Convention}
+
+The sign of each principal axis is ambiguous.  Mirror resolves this by
+orienting each axis toward the side with greater atomic mass (for
+mass-weighted mode) or more atoms (for geometric mode):
+
+\begin{equation}
+\vect{v}_k \leftarrow \begin{cases}
++\vect{v}_k & \text{if } \sum_{(\vect{r}'_i \cdot \vect{v}_k) > 0} m_i
+               \ge \sum_{(\vect{r}'_i \cdot \vect{v}_k) < 0} m_i, \\
+-\vect{v}_k & \text{otherwise}.
+\end{cases}
+\end{equation}
+
+\subsection{Geometric Mode (PCA)}
+
+In geometric mode, the covariance (scatter) matrix is used instead of the
+inertia tensor:
+
+\begin{equation}
+\vect{S} = \sum_i \vect{r}'_i (\vect{r}'_i)^{\mathsf T},
+\end{equation}
+
+which is equivalent to PCA with equal weights.  The eigenvalue
+decomposition and axis assignment proceed identically, but the
+degeneracy criteria differ (see below).
+
+\subsection{Degeneracy Handling}
+
+A molecule is flagged as degenerate when its principal axes are not
+uniquely defined.  The conditions depend on the mode:
+
+\begin{itemize}
+    \item \textbf{Inertia tensor (mass mode)}: degenerate if
+          $\lambda_2 < \varepsilon$ (0D or 1D molecule).  Planar
+          molecules are NOT degenerate because the perpendicular-axis
+          theorem guarantees a non-zero out-of-plane moment.
+    \item \textbf{Covariance matrix (geom mode)}: degenerate if any
+          eigenvalue is zero (rank-deficient).  Planar molecules are
+          degenerate here.
+\end{itemize}
+
+Additionally, if the eigenvalues are nearly equal (spherical or symmetric
+top), the axes are considered degenerate:
+
+\begin{equation}
+\min\!\left(
+\frac{|\lambda_3 - \lambda_2|}{\lambda_3},
+\frac{|\lambda_2 - \lambda_1|}{\lambda_3},
+\frac{|\lambda_3 - \lambda_1|}{\lambda_3}
+\right) < \varepsilon_{\text{gap}} = 10^{-6}.
+\end{equation}
+
+In degenerate cases, the centred coordinates are returned without
+rotation, and the rotation matrix is set to the identity.
+
+% =================================================================
+\section{Relationship to the Kabsch Algorithm}
+% =================================================================
+
+The Kabsch algorithm finds the optimal rotation matrix $\vect{R}$ that
+minimises the root-mean-square deviation (RMSD) between two sets of
+points $\{\vect{p}_i\}$ and $\{\vect{q}_i\}$:
+
+\begin{equation}
+\min_{\vect{R}} \sum_i \|\vect{R} \vect{p}_i - \vect{q}_i\|^2.
+\end{equation}
+
+The solution involves the cross-covariance matrix
+$\vect{H} = \vect{P}^{\mathsf T} \vect{Q}$ and its singular value
+decomposition (SVD):
+
+\begin{equation}
+\vect{H} = \vect{U} \vect{\Sigma} \vect{V}^{\mathsf T},
+\qquad
+\vect{R} = \vect{V} \vect{U}^{\mathsf T}.
+\end{equation}
+
+\paragraph{Relation to CPA.}  CPA differs from Kabsch in both purpose
+and method:
+
+\begin{itemize}
+    \item \textbf{Purpose}: Kabsch aligns two different conformations of
+          the same molecule.  CPA aligns a single molecule to a canonical
+          reference frame independent of any external target.
+    \item \textbf{Matrix}: Kabsch uses the cross-covariance between two
+          point sets.  CPA uses the inertia tensor (mass-weighted
+          auto-covariance) of a single point set.
+    \item \textbf{Output}: Kabsch gives the rotation between two
+          structures.  CPA gives the absolute orientation relative to the
+          principal axes.
+\end{itemize}
+
+\paragraph{Unified view.}  Both algorithms ultimately compute an
+eigendecomposition (CPA) or SVD (Kabsch) of a $3 \times 3$ matrix and
+extract a rotation.  If one performs CPA on a structure and then applies
+the inverse rotation, the principal axes align with Cartesian axes ---
+analogous to rotating one structure onto another's principal frame.
+
+% =================================================================
+\section{Sohncke Mirror Transformation}
+% =================================================================
+
+\subsection{Reflection Matrices}
+
+A mirror operation about a plane through the origin (or the molecular
+centroid) is represented by a Householder reflection matrix.  The three
+available planes correspond to:
+
+\begin{align}
+\vect{M}_{YZ} &= \operatorname{diag}(-1, 1, 1) \quad \text{(invert $x$)}, \\
+\vect{M}_{XZ} &= \operatorname{diag}(1, -1, 1) \quad \text{(invert $y$)}, \\
+\vect{M}_{XY} &= \operatorname{diag}(1, 1, -1) \quad \text{(invert $z$)}.
+\end{align}
+
+\subsection{Relation to Chirality}
+
+If a molecule is chiral, its mirror image is a non-superimposable
+enantiomer.  The CPA alignment of the mirrored structure (MCPA) enables
+direct comparison: for a chiral molecule, MCPA will differ from CPA by
+more than a simple rotation.  The difference in principal moments between
+CPA and MCPA provides a quantitative measure of molecular chirality.
+
+\subsection{Application to Sohncke Space Groups}
+
+In crystallography, a Sohncke space group contains only orientation-
+preserving operations (rotations, translations).  Mirror operations are
+present only in non-Sohncke groups.  The Mirror toolkit classifies space
+groups into three types:
+
+\begin{itemize}
+    \item \textbf{sgType 1} (Sohncke, enantiomorphic): space groups
+          that allow chiral crystal structures.
+    \item \textbf{sgType 2} (Sohncke, non-enantiomorphic): Sohncke
+          groups without enantiomorphic pairs.
+    \item \textbf{sgType 3} (non-Sohncke): contain improper rotations
+          (mirrors, inversions).
+\end{itemize}
+
+The set of Sohncke space groups (65 groups) is hardcoded from the
+International Tables of Crystallography, and the enantiomorphic subset
+(11 pairs) is similarly defined.
+
+% =================================================================
+\section{Pore Detection}
+% =================================================================
+
+\subsection{Grid-based Distance Field}
+
+The pore detection pipeline operates on a supercell of the CIF.  Atoms
+are projected onto the $ab$-plane, and a dense 2D grid is created:
+
+\begin{equation}
+\vect{G} = \{(x_i, y_j) \mid x_i = x_{\min} + i\Delta x,\;
+y_j = y_{\min} + j\Delta y\},
+\end{equation}
+
+with resolution $n_{\text{grid}}$ (default 200).  The distance from each
+grid point to the nearest atom centre (minus that atom's VDW radius) is
+computed:
+
+\begin{equation}
+d(\vect{g}) = \min_k \left( \|\vect{g} - \vect{a}_k\| - r_k^{\text{VDW}} \right),
+\end{equation}
+
+where $\vect{a}_k$ and $r_k^{\text{VDW}}$ are the position and VDW
+radius of atom $k$.
+
+\subsection{Pore Centre and Radius}
+
+The largest connected region where $d(\vect{g}) \ge r_{\text{probe}}$
+(default 1.2\,\AA) is identified via breadth-first search.  The pore
+centre is the grid point within this region with the maximum $d(\vect{g})$,
+and the pore radius $R_1$ is $d$ at that point.
+
+\subsection{Cylindrical Projection}
+
+VDW-surface points are generated via Fibonacci sphere sampling ($N$
+points per atom).  These points are projected onto a cylinder of radius
+$R_1$ centred at the pore centre:
+
+\begin{align}
+\theta &= \arctan2(y - y_0, x - x_0), \\
+z     &= z_{\text{VDW}}.
+\end{align}
+
+The result is a $\theta$--$z$ point cloud that is binned into a 2D
+histogram for visualisation.
+
+\subsection{VDW Heatmap}
+
+The VDW heatmap is a smooth Gaussian kernel-density estimate:
+
+\begin{equation}
+\rho(\theta, z) = \sum_p A_p \exp\!\left(
+-\frac{(\theta - \theta_p)^2}{2\sigma_\theta^2}
+-\frac{(z - z_p)^2}{2\sigma_z^2}
+\right),
+\end{equation}
+
+where $A_p$ is the alpha weight of point $p$
+($A_p = 1 - r_p / r_{\max}$, with $r_p$ the radial distance of the point
+from the pore centre), and $\sigma_\theta$, $\sigma_z$ are proportional
+to the VDW radius of the originating atom ($\sigma = K \cdot r^{\text{VDW}}$,
+$K = 0.12$).
+
+% =================================================================
+\section{Morphology Parameters}
+% =================================================================
+
+\subsection{Circularity Index (CI)}
+
+The angular wall-distance profile $r(\theta)$ is computed by binning VDW
+points into 72 angular bins ($5^\circ$).  Within each bin, the mean
+radial distance is computed.  CI is then:
+
+\begin{equation}
+\text{CI} = 1 - \frac{\sigma_r}{\mu_r},
+\end{equation}
+
+where $\mu_r$ and $\sigma_r$ are the mean and standard deviation across
+bins.  CI $= 1$ indicates a perfectly circular pore; CI $< 1$ indicates
+ellipticity or faceting.
+
+\subsection{Fourier Power Spectrum}
+
+The mean-subtracted profile $r'(\theta) = r(\theta) - \mu_r$ is
+Fourier-transformed:
+
+\begin{equation}
+F_n = \sum_{k=0}^{N-1} r'(\theta_k) e^{-2\pi i n k / N},
+\qquad P_n = \frac{|F_n|^2}{\sum_{k=0}^{N-1} |F_k|^2}.
+\end{equation}
+
+The pore label is assigned from the dominant frequency $n \ge 2$:
+L6 ($n=6$), L4 ($n=4$), L3 ($n=3$), L2 ($n=2$).
+
+\subsection{Corrugation Factor (CF)}
+
+The approximate VDW surface area is:
+
+\begin{equation}
+A_{\text{VDW}} \approx N_{\text{pts}} \cdot R_1 \cdot \Delta\theta \cdot
+\Delta z,
+\end{equation}
+
+where $\Delta\theta = 2\pi / n_\theta$ and $\Delta z = \Delta z_{\text{total}} / n_z$.
+The smooth cylinder area is $A_{\text{smooth}} = 2\pi R_1 \Delta z_{\text{total}}$.
+Then:
+
+\begin{equation}
+\text{CF} = \frac{A_{\text{VDW}}}{A_{\text{smooth}}}.
+\end{equation}
+
+\subsection{Mean Curvature (curv\_H)}
+
+The VDW density field $\rho(\theta, z)$ is smoothed with a Gaussian
+filter ($\sigma = 1.0$), and the Laplacian is approximated via finite
+differences:
+
+\begin{equation}
+\nabla^2 \rho \approx \frac{\partial^2 \rho}{\partial \theta^2} +
+\frac{\partial^2 \rho}{\partial z^2},
+\end{equation}
+
+\begin{equation}
+\text{curv\_H} = \langle |\nabla^2 \rho| \rangle.
+\end{equation}
+
+\subsection{Helicity}
+
+The angular profiles of adjacent $z$-layers are cross-correlated to find
+the angular shift $\Delta\theta$ that maximises their alignment:
+
+\begin{equation}
+C_k(\Delta\theta) = \sum_i r_k(\theta_i) \cdot r_{k+1}(\theta_i + \Delta\theta).
+\end{equation}
+
+The helical twist angle is:
+
+\begin{equation}
+\alpha = \arctan\!\left(
+\frac{\Delta\theta_{\max} \cdot R_1}{\Delta z_{\text{layer}}}
+\right).
+\end{equation}
+
+\subsection{Radial Skewness (skew\_r)}
+
+\begin{equation}
+\text{skew\_r} = \frac{\langle (r - \mu_r)^3 \rangle}{\sigma_r^3}.
+\end{equation}
+
+Positive skewness indicates that the pore wall has more outward-
+protruding features than inward ones.
+
+% =================================================================
+\section{Guest Orientation Scanning}
+% =================================================================
+
+\subsection{Rotation Parametrisation}
+
+Each guest orientation is parametrised by two spherical angles
+$(\theta, \phi)$ defining the direction of the molecule's $+z$ axis.
+The rotation matrix that maps the $+z$ axis to direction
+$(\theta, \phi)$ is computed via the Rodrigues rotation formula:
+
+\begin{equation}
+\vect{R}(\theta, \phi) = \vect{I} + \sin\alpha \,[\vect{k}]_\times +
+(1 - \cos\alpha) (\vect{k} \vect{k}^{\mathsf T} - \vect{I}),
+\end{equation}
+
+where $\vect{k}$ is the unit rotation axis (cross product of source and
+target directions) and $\alpha$ is the rotation angle.
+
+\subsection{VDW Clash Detection}
+
+For each orientation, the guest atom positions $\{\vect{g}_j\}$ are
+computed from the rotation matrix and the guest centroid position
+$\vect{p}$:
+
+\begin{equation}
+\vect{g}_j = \vect{R} \vect{g}_j^{(0)} + \vect{p}.
+\end{equation}
+
+A clash is registered if any guest--host atom pair violates the VDW
+separation criterion:
+
+\begin{equation}
+\|\vect{g}_j - \vect{h}_i\| < s \cdot (r_j^{\text{VDW}} + r_i^{\text{VDW}}),
+\end{equation}
+
+where $s$ is the clash scale factor (default 0.75).  The fraction of
+clash-free orientations is reported as the accessible fraction.
+
+\subsection{Three-Region Partition (Rolling Sphere)}
+
+The guest's minimum enclosing VDW sphere radius $R_{\text{env}}$ is
+computed as:
+
+\begin{equation}
+R_{\text{env}} = \max_j \left( \|\vect{g}_j - \vect{g}_{\text{COM}}\| +
+r_j^{\text{VDW}} \right).
+\end{equation}
+
+A rolling-sphere algorithm then determines, for each position
+$(x, y)$ in the pore cross-section:
+
+\begin{itemize}
+    \item \textbf{Free} (green): the envelope sphere
+          $(R = R_{\text{env}})$ fits without clashes.
+    \item \textbf{Restricted} (amber): only the centroid
+          $(R = 0)$ fits.
+    \item \textbf{Blocked} (red): neither fits.
+\end{itemize}
+
+% =================================================================
+\section{Space Group Analysis}
+% =================================================================
+
+Space-group detection uses pymatgen's \texttt{SpacegroupAnalyzer} at
+multiple tolerance levels:
+
+\begin{equation}
+\text{symprec} \in \{0.01, 0.05, 0.1, 0.2\}.
+\end{equation}
+
+The confidence score is the fraction of tolerances that agree on the
+assigned group.  Sohncke and enantiomorphic classifications are
+determined by lookup tables compiled from the International Tables.
+
+% =================================================================
+\section{Summary of Parameter Meanings}
+% =================================================================
+
+\begin{longtable}{llp{7cm}}
+\toprule
+Parameter & Symbol & Physical meaning \\
+\midrule
+\endhead
+CI & $\text{CI}$ & Pore circularity; 1 = perfect circle \\
+CF & $\text{CF}$ & Wall corrugation; >1 = rough wall \\
+curv\_H & $\langle|\nabla^2\rho|\rangle$ & Mean wall curvature \\
+power\_2 & $P_2$ & 2-fold Fourier power (ellipticity) \\
+power\_3 & $P_3$ & 3-fold Fourier power (trigonal) \\
+power\_4 & $P_4$ & 4-fold Fourier power (square) \\
+power\_6 & $P_6$ & 6-fold Fourier power (hexagonal) \\
+helicity & $\alpha$ & Helical twist between layers (deg) \\
+skew\_r & $\gamma_r$ & Wall-distance skewness \\
+$R_1$ / $R_p$ & $R_1$ & Pore radius (\AA) \\
+$R_e$ & $R_e$ & Expand radius (\AA) \\
+PLD & $d_{\text{PLD}}$ & Pore-limiting diameter (\AA) \\
+LCD & $d_{\text{LCD}}$ & Largest cavity diameter (\AA) \\
+$I_1/I_3$ & $I_1/I_3$ & Principal-moment ratio \\
+$\theta_{\text{steps}}$ & $N_\theta$ & Polar sampling for orientation scan \\
+$\phi_{\text{steps}}$ & $N_\phi$ & Azimuthal sampling for orientation scan \\
+$s_{\text{clash}}$ & $s$ & VDW clash scale factor \\
+$r_{\text{probe}}$ & $r_p$ & Probe radius for pore detection (\AA) \\
+$n_{\text{grid}}$ & $N_{\text{grid}}$ & Grid resolution for distance field \\
+K & $K$ & Gaussian sigma scaling factor (VDW heatmap) \\
+\bottomrule
+\end{longtable}
+
+\end{document}
